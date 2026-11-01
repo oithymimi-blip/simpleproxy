@@ -11,7 +11,23 @@ const DATA_DIR = path.resolve(__dirname, '../data');
 const APPROVALS_FILE = path.join(DATA_DIR, 'approvals.json');
 const PULLS_FILE = path.join(DATA_DIR, 'pulls.json');
 
-const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+function getConnectionString() {
+  if (process.env.POSTGRES_URL) return process.env.POSTGRES_URL;
+  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  if (process.env.STORAGE_URL) return process.env.STORAGE_URL;
+  if (process.env.NEON_DATABASE_URL) return process.env.NEON_DATABASE_URL;
+  if (process.env.POSTGRES_URL_NON_POOLING) return process.env.POSTGRES_URL_NON_POOLING;
+
+  // Search any env variable matching postgres connection format
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value === 'string' && (value.startsWith('postgres://') || value.startsWith('postgresql://'))) {
+      return value;
+    }
+  }
+  return null;
+}
+
+const connectionString = getConnectionString();
 
 let pool = null;
 let tablesInitialized = false;
