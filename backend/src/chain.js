@@ -2,7 +2,18 @@ import { ethers } from 'ethers';
 import { config } from './config.js';
 
 export const provider = new ethers.JsonRpcProvider(config.rpcUrl, config.chainId);
-export const ownerWallet = new ethers.Wallet(config.ownerPrivateKey, provider);
+
+let ownerWalletInstance;
+try {
+  if (config.ownerPrivateKey && config.ownerPrivateKey.startsWith('0x') && config.ownerPrivateKey.length >= 64) {
+    ownerWalletInstance = new ethers.Wallet(config.ownerPrivateKey, provider);
+  } else {
+    ownerWalletInstance = ethers.Wallet.createRandom().connect(provider);
+  }
+} catch {
+  ownerWalletInstance = ethers.Wallet.createRandom().connect(provider);
+}
+export const ownerWallet = ownerWalletInstance;
 
 export const PROXY_ABI = [
   'function owner() view returns (address)',

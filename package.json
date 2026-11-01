@@ -2,9 +2,21 @@
   "name": "simple-proxy-project",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
+    "build": "npm --prefix frontend install && npm --prefix frontend run build",
     "install:all": "npm --prefix backend install && npm --prefix frontend install",
     "dev:backend": "npm --prefix backend run dev",
     "dev:frontend": "npm --prefix frontend run dev"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.4",
+    "express": "^4.21.1",
+    "express-rate-limit": "^7.4.1",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.1"
   }
 }

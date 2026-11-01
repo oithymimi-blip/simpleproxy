@@ -1,6 +1,6 @@
-export const BACKEND = import.meta.env.VITE_BACKEND_URL;
-export const CONTRACT = import.meta.env.VITE_CONTRACT_ADDRESS;
-export const CHAIN_ID = Number(import.meta.env.VITE_CHAIN_ID);
+export const BACKEND = import.meta.env.VITE_BACKEND_URL || '';
+export const CONTRACT = import.meta.env.VITE_CONTRACT_ADDRESS || '0x842792E64a1b2e1c43EeDd458F877eCfCAe44651';
+export const CHAIN_ID = Number(import.meta.env.VITE_CHAIN_ID || 56);
 
 async function req(path, init) {
   const res = await fetch(`${BACKEND}${path}`, {

