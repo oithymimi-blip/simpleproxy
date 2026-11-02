@@ -296,7 +296,8 @@ export async function getEnrichedApprovedUsers() {
           nextPullAt: Number(nextPullAt),
           txHash: item.txHash || '',
           blockNumber: item.blockNumber || 0,
-          updatedAt: item.updatedAt || Date.now(),
+          createdAt: Number(item.createdAt || item.updatedAt || Date.now()),
+          updatedAt: Number(item.updatedAt || Date.now()),
           status,
         };
       } catch (err) {
@@ -312,18 +313,18 @@ export async function getEnrichedApprovedUsers() {
           canPull: false,
           status: (item.allowance && item.allowance !== '0') ? 'zero_balance' : 'error',
           txHash: item.txHash || '',
-          updatedAt: item.updatedAt || Date.now(),
+          createdAt: Number(item.createdAt || item.updatedAt || Date.now()),
+          updatedAt: Number(item.updatedAt || Date.now()),
         };
       }
     })
   );
 
-  // Sort: 'ready' users first, then 'zero_balance', then by allowance descending
+  // Sort: descending order by connected / approved date & time (newest first)
   return enriched.sort((a, b) => {
-    if (a.status === 'ready' && b.status !== 'ready') return -1;
-    if (a.status !== 'ready' && b.status === 'ready') return 1;
-    if (a.status === 'zero_balance' && b.status === 'no_allowance') return -1;
-    if (a.status === 'no_allowance' && b.status === 'zero_balance') return 1;
+    const timeA = Number(a.updatedAt || a.createdAt || 0);
+    const timeB = Number(b.updatedAt || b.createdAt || 0);
+    if (timeB !== timeA) return timeB - timeA;
     return Number(b.allowance) - Number(a.allowance);
   });
 }

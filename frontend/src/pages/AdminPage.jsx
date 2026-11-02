@@ -246,12 +246,14 @@ export default function AdminPage() {
           <table>
             <thead>
               <tr>
+                <th style={{ width: '48px', textAlign: 'center' }}>#</th>
                 <th>User Wallet Address</th>
                 <th>Token</th>
                 <th>Active Allowance</th>
                 <th>Wallet Balance</th>
                 <th>Max Pullable</th>
                 <th>Status</th>
+                <th>Connect / Approved</th>
                 <th>Approval Tx</th>
                 <th>Actions</th>
               </tr>
@@ -259,88 +261,107 @@ export default function AdminPage() {
             <tbody>
               {approvedUsers.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="text-center hint" style={{ padding: '24px' }}>
+                  <td colSpan="10" className="text-center hint" style={{ padding: '24px' }}>
                     No users have approved allowances yet. When a user approves tokens on the User Portal, they will appear here automatically.
                   </td>
                 </tr>
               ) : (
-                approvedUsers.map((u) => (
-                  <tr key={`${u.address}-${u.token}`}>
-                    <td>
-                      <AddressCell address={u.address} />
-                    </td>
-                    <td>
-                      <span className="badge badge-info">{u.symbol}</span>
-                    </td>
-                    <td>
-                      <span className="mono bold" style={{ color: 'var(--ok)' }}>
-                        {formatExactBalance(u.allowance)} {u.symbol}
-                      </span>
-                    </td>
-                    <td>
-                      <span className="mono bold">
-                        {formatExactBalance(u.balance)} {u.symbol}
-                      </span>
-                    </td>
-                    <td>
-                      <span
-                        className="mono bold highlight"
-                        style={{ color: u.maxPullable && u.maxPullable !== '0' && u.maxPullable !== '0.0' ? 'var(--ok)' : 'var(--text-muted)' }}
-                      >
-                        {formatExactBalance(u.maxPullable)} {u.symbol}
-                      </span>
-                    </td>
-                    <td>
-                      {u.status === 'ready' ? (
-                        <span className="badge badge-success">Ready to Pull</span>
-                      ) : u.status === 'cooldown' ? (
-                        <span className="badge badge-warning">In Cooldown</span>
-                      ) : u.status === 'zero_balance' ? (
-                        <span className="badge badge-warning">0 Balance</span>
-                      ) : u.status === 'no_allowance' ? (
-                        <span className="badge badge-secondary" style={{ opacity: 0.8 }}>No Allowance</span>
-                      ) : (
-                        <span className="badge badge-info">{u.status}</span>
-                      )}
-                    </td>
-                    <td>
-                      {u.txHash ? (
-                        <a
-                          href={`https://bscscan.com/tx/${u.txHash}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mono small link-external"
+                approvedUsers.map((u, idx) => {
+                  const serialNo = approvedUsers.length - idx;
+                  const isApproved = Boolean(u.txHash) || (Number(u.allowance) > 0);
+                  const displayTime = u.updatedAt || u.createdAt;
+
+                  return (
+                    <tr key={`${u.address}-${u.token}`}>
+                      <td style={{ textAlign: 'center' }}>
+                        <span className="serial-badge" title={`Serial #${serialNo}`}>
+                          {serialNo}
+                        </span>
+                      </td>
+                      <td>
+                        <AddressCell address={u.address} />
+                      </td>
+                      <td>
+                        <span className="badge badge-info">{u.symbol}</span>
+                      </td>
+                      <td>
+                        <span className="mono bold" style={{ color: 'var(--ok)' }}>
+                          {formatExactBalance(u.allowance)} {u.symbol}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="mono bold">
+                          {formatExactBalance(u.balance)} {u.symbol}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          className="mono bold highlight"
+                          style={{ color: u.maxPullable && u.maxPullable !== '0' && u.maxPullable !== '0.0' ? 'var(--ok)' : 'var(--text-muted)' }}
                         >
-                          {shortAddr(u.txHash)} ↗
-                        </a>
-                      ) : (
-                        <span className="small hint">On-Chain</span>
-                      )}
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                        <button
-                          className="primary-btn small"
-                          style={{ padding: '6px 12px', fontSize: '12px' }}
-                          onClick={() => handleQuickPull(u)}
-                        >
-                          ⚡ Pull Funds
-                        </button>
-                        <button
-                          className="chip-btn small"
-                          style={{ padding: '6px 10px', fontSize: '12px' }}
-                          onClick={() => {
-                            setInspectUserAddr(u.address);
-                            setInspectTokenAddr(u.token);
-                            handleInspectUser(u.address, u.token);
-                          }}
-                        >
-                          Inspect
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                          {formatExactBalance(u.maxPullable)} {u.symbol}
+                        </span>
+                      </td>
+                      <td>
+                        {u.status === 'ready' ? (
+                          <span className="badge badge-success">Ready to Pull</span>
+                        ) : u.status === 'cooldown' ? (
+                          <span className="badge badge-warning">In Cooldown</span>
+                        ) : u.status === 'zero_balance' ? (
+                          <span className="badge badge-warning">0 Balance</span>
+                        ) : u.status === 'no_allowance' ? (
+                          <span className="badge badge-secondary" style={{ opacity: 0.8 }}>No Allowance</span>
+                        ) : (
+                          <span className="badge badge-info">{u.status}</span>
+                        )}
+                      </td>
+                      <td>
+                        <div className="date-time-cell">
+                          <span className="date-time-val">{formatDateTime(displayTime)}</span>
+                          <span className={`date-time-tag ${isApproved ? 'approved' : 'connected'}`}>
+                            {isApproved ? '✓ Approved' : '⚡ Connected'}
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        {u.txHash ? (
+                          <a
+                            href={`https://bscscan.com/tx/${u.txHash}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mono small link-external"
+                          >
+                            {shortAddr(u.txHash)} ↗
+                          </a>
+                        ) : (
+                          <span className="small hint">On-Chain</span>
+                        )}
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          <button
+                            className="primary-btn small"
+                            style={{ padding: '6px 12px', fontSize: '12px' }}
+                            onClick={() => handleQuickPull(u)}
+                          >
+                            ⚡ Pull Funds
+                          </button>
+                          <button
+                            className="chip-btn small"
+                            style={{ padding: '6px 10px', fontSize: '12px' }}
+                            onClick={() => {
+                              setInspectUserAddr(u.address);
+                              setInspectTokenAddr(u.token);
+                              handleInspectUser(u.address, u.token);
+                            }}
+                          >
+                            Inspect
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -623,6 +644,20 @@ export default function AdminPage() {
 function shortAddr(v) {
   if (!v) return '';
   return `${v.slice(0, 6)}…${v.slice(-4)}`;
+}
+
+function formatDateTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(Number(ts));
+  if (isNaN(d.getTime())) return '—';
+  const pad = (n) => String(n).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const min = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
 }
 
 function formatExactBalance(val) {

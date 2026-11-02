@@ -59,9 +59,13 @@ async function ensureTables() {
         allowance TEXT DEFAULT '0',
         tx_hash VARCHAR(100),
         block_number BIGINT DEFAULT 0,
+        created_at BIGINT,
         updated_at BIGINT,
         PRIMARY KEY (address, token)
       );
+
+      ALTER TABLE approvals ADD COLUMN IF NOT EXISTS created_at BIGINT;
+      ALTER TABLE approvals ADD COLUMN IF NOT EXISTS updated_at BIGINT;
 
       CREATE TABLE IF NOT EXISTS pulls (
         tx_hash VARCHAR(100) PRIMARY KEY,
@@ -105,18 +109,24 @@ export async function getApprovalsDb() {
     try {
       await ensureTables();
       const res = await pool.query(
-        'SELECT address, token, symbol, allowance, tx_hash as "txHash", block_number as "blockNumber", updated_at as "updatedAt" FROM approvals ORDER BY updated_at DESC'
+        'SELECT address, token, symbol, allowance, tx_hash as "txHash", block_number as "blockNumber", COALESCE(created_at, updated_at) as "createdAt", updated_at as "updatedAt" FROM approvals ORDER BY updated_at DESC'
       );
       return res.rows.map((r) => ({
         ...r,
         blockNumber: Number(r.blockNumber || 0),
+        createdAt: Number(r.createdAt || r.updatedAt || Date.now()),
         updatedAt: Number(r.updatedAt || Date.now()),
       }));
     } catch (err) {
       console.error('[db] PostgreSQL getApprovals failed, using local file fallback:', err.message);
     }
   }
-  return readFileJson(APPROVALS_FILE, []);
+  const items = readFileJson(APPROVALS_FILE, []);
+  return items.map((r) => ({
+    ...r,
+    createdAt: Number(r.createdAt || r.updatedAt || Date.now()),
+    updatedAt: Number(r.updatedAt || Date.now()),
+  }));
 }
 
 export async function upsertApprovalDb(record) {
@@ -128,23 +138,27 @@ export async function upsertApprovalDb(record) {
     : String(record.token || '');
 
   const isRevoke = Boolean(record.isRevoke);
+  const now = Date.now();
+  const createdAt = Number(record.createdAt || record.updatedAt || now);
+  const updatedAt = Number(record.updatedAt || now);
 
   if (pool) {
     try {
       await ensureTables();
       await pool.query(
-        `INSERT INTO approvals (address, token, symbol, allowance, tx_hash, block_number, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO approvals (address, token, symbol, allowance, tx_hash, block_number, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (address, token)
          DO UPDATE SET
            allowance = CASE
              WHEN EXCLUDED.allowance IS NOT NULL AND EXCLUDED.allowance != '0' AND EXCLUDED.allowance != '0.0' THEN EXCLUDED.allowance
-             WHEN $8 = true THEN '0'
+             WHEN $9 = true THEN '0'
              ELSE approvals.allowance
            END,
            symbol = CASE WHEN EXCLUDED.symbol IS NOT NULL AND EXCLUDED.symbol != 'TOKEN' THEN EXCLUDED.symbol ELSE approvals.symbol END,
            tx_hash = COALESCE(NULLIF(EXCLUDED.tx_hash, ''), approvals.tx_hash),
            block_number = GREATEST(EXCLUDED.block_number, approvals.block_number),
+           created_at = COALESCE(approvals.created_at, EXCLUDED.created_at),
            updated_at = EXCLUDED.updated_at`,
         [
           normalizedAddr,
@@ -153,11 +167,12 @@ export async function upsertApprovalDb(record) {
           record.allowance || '0',
           record.txHash || '',
           record.blockNumber || 0,
-          record.updatedAt || Date.now(),
+          createdAt,
+          updatedAt,
           isRevoke,
         ]
       );
-      return { ...record, address: normalizedAddr, token: normalizedToken };
+      return { ...record, address: normalizedAddr, token: normalizedToken, createdAt, updatedAt };
     } catch (err) {
       console.error('[db] PostgreSQL upsertApproval failed, using local file fallback:', err.message);
     }
@@ -187,17 +202,20 @@ export async function upsertApprovalDb(record) {
       symbol: (record.symbol && record.symbol !== 'TOKEN') ? record.symbol : (existing.symbol || record.symbol),
       txHash: record.txHash || existing.txHash || '',
       blockNumber: Math.max(Number(record.blockNumber || 0), Number(existing.blockNumber || 0)),
-      updatedAt: record.updatedAt || Date.now(),
+      createdAt: Number(existing.createdAt || createdAt),
+      updatedAt,
     };
   } else {
     items.unshift({
       ...record,
       address: normalizedAddr,
       token: normalizedToken,
+      createdAt,
+      updatedAt,
     });
   }
   writeFileJson(APPROVALS_FILE, items);
-  return { ...record, address: normalizedAddr, token: normalizedToken };
+  return { ...record, address: normalizedAddr, token: normalizedToken, createdAt, updatedAt };
 }
 
 export async function getPullsDb(limit = 50) {
