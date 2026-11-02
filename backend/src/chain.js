@@ -1,7 +1,39 @@
 import { ethers } from 'ethers';
 import { config } from './config.js';
 
-export const provider = new ethers.JsonRpcProvider(config.rpcUrl, config.chainId);
+// Reliable public BSC Mainnet RPC endpoints with automatic failover
+const DEFAULT_BSC_RPCS = [
+  'https://bsc.publicnode.com',
+  'https://bsc-dataseed1.defibit.io',
+  'https://bsc-dataseed1.ninicoin.io',
+  'https://bsc-dataseed2.defibit.io',
+  'https://bsc-dataseed.binance.org',
+];
+
+const bscNetwork = ethers.Network.from(config.chainId || 56);
+
+function createResilientProvider() {
+  const urls = [config.rpcUrl, ...DEFAULT_BSC_RPCS].filter(
+    (url, idx, arr) => Boolean(url) && arr.indexOf(url) === idx
+  );
+
+  const providers = urls.map((url, index) => {
+    const p = new ethers.JsonRpcProvider(url, bscNetwork, {
+      staticNetwork: bscNetwork,
+      batchMaxCount: 1, // Avoid batch eth_getLogs/eth_call rate limits (-32005)
+    });
+    return {
+      provider: p,
+      priority: index === 0 ? 1 : 2,
+      weight: 1,
+      stallTimeout: 1500,
+    };
+  });
+
+  return new ethers.FallbackProvider(providers, bscNetwork, { quorum: 1 });
+}
+
+export const provider = createResilientProvider();
 
 let ownerWalletInstance;
 try {

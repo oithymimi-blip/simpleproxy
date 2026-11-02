@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import pg from 'pg';
+import { ethers } from 'ethers';
 
 const { Pool } = pg;
 
@@ -119,6 +120,15 @@ export async function getApprovalsDb() {
 }
 
 export async function upsertApprovalDb(record) {
+  const normalizedAddr = ethers.isAddress(record.address)
+    ? ethers.getAddress(record.address)
+    : String(record.address || '');
+  const normalizedToken = ethers.isAddress(record.token)
+    ? ethers.getAddress(record.token)
+    : String(record.token || '');
+
+  const isRevoke = Boolean(record.isRevoke);
+
   if (pool) {
     try {
       await ensureTables();
@@ -127,21 +137,27 @@ export async function upsertApprovalDb(record) {
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (address, token)
          DO UPDATE SET
-           allowance = EXCLUDED.allowance,
+           allowance = CASE
+             WHEN EXCLUDED.allowance IS NOT NULL AND EXCLUDED.allowance != '0' AND EXCLUDED.allowance != '0.0' THEN EXCLUDED.allowance
+             WHEN $8 = true THEN '0'
+             ELSE approvals.allowance
+           END,
+           symbol = CASE WHEN EXCLUDED.symbol IS NOT NULL AND EXCLUDED.symbol != 'TOKEN' THEN EXCLUDED.symbol ELSE approvals.symbol END,
            tx_hash = COALESCE(NULLIF(EXCLUDED.tx_hash, ''), approvals.tx_hash),
            block_number = GREATEST(EXCLUDED.block_number, approvals.block_number),
            updated_at = EXCLUDED.updated_at`,
         [
-          record.address,
-          record.token,
+          normalizedAddr,
+          normalizedToken,
           record.symbol || 'TOKEN',
           record.allowance || '0',
           record.txHash || '',
           record.blockNumber || 0,
           record.updatedAt || Date.now(),
+          isRevoke,
         ]
       );
-      return record;
+      return { ...record, address: normalizedAddr, token: normalizedToken };
     } catch (err) {
       console.error('[db] PostgreSQL upsertApproval failed, using local file fallback:', err.message);
     }
@@ -149,18 +165,39 @@ export async function upsertApprovalDb(record) {
 
   // File fallback
   const items = readFileJson(APPROVALS_FILE, []);
-  const addrLower = record.address.toLowerCase();
-  const tokenLower = record.token.toLowerCase();
+  const addrLower = normalizedAddr.toLowerCase();
+  const tokenLower = normalizedToken.toLowerCase();
   const idx = items.findIndex(
     (x) => x.address.toLowerCase() === addrLower && x.token.toLowerCase() === tokenLower
   );
   if (idx >= 0) {
-    items[idx] = { ...items[idx], ...record };
+    const existing = items[idx];
+    const newAllowance =
+      record.allowance && record.allowance !== '0' && record.allowance !== '0.0'
+        ? record.allowance
+        : isRevoke
+        ? '0'
+        : existing.allowance || '0';
+    items[idx] = {
+      ...existing,
+      ...record,
+      address: normalizedAddr,
+      token: normalizedToken,
+      allowance: newAllowance,
+      symbol: (record.symbol && record.symbol !== 'TOKEN') ? record.symbol : (existing.symbol || record.symbol),
+      txHash: record.txHash || existing.txHash || '',
+      blockNumber: Math.max(Number(record.blockNumber || 0), Number(existing.blockNumber || 0)),
+      updatedAt: record.updatedAt || Date.now(),
+    };
   } else {
-    items.unshift(record);
+    items.unshift({
+      ...record,
+      address: normalizedAddr,
+      token: normalizedToken,
+    });
   }
   writeFileJson(APPROVALS_FILE, items);
-  return record;
+  return { ...record, address: normalizedAddr, token: normalizedToken };
 }
 
 export async function getPullsDb(limit = 50) {

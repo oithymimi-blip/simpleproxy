@@ -141,6 +141,7 @@ export default function UserPage() {
         symbol: tokenInfo?.symbol || 'TOKEN',
         txHash: tx.hash,
         allowance: approveAmount,
+        isRevoke: Number(approveAmount) === 0,
       }).catch((e) => console.error('Failed to notify backend:', e));
 
       // Refresh on-chain balance & allowance

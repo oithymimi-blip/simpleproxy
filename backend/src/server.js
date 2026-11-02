@@ -155,13 +155,20 @@ app.get('/api/activity', async (req, res) => {
 
 app.get('/api/admin/approved-users', async (_req, res) => {
   try {
-    if (process.env.VERCEL) {
-      await syncOnChainApprovals().catch(() => {});
-    }
     const items = await getEnrichedApprovedUsers();
     res.json({ total: items.length, items });
   } catch (err) {
     res.status(500).json({ error: 'read_failed', message: err.message });
+  }
+});
+
+app.post('/api/admin/sync', async (_req, res) => {
+  try {
+    await syncOnChainApprovals().catch((e) => console.warn('[server] Admin sync warning:', e.message));
+    const items = await getEnrichedApprovedUsers();
+    res.json({ ok: true, total: items.length, items });
+  } catch (err) {
+    res.status(500).json({ error: 'sync_failed', message: err.message });
   }
 });
 

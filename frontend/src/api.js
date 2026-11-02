@@ -1,4 +1,12 @@
-export const BACKEND = import.meta.env.VITE_BACKEND_URL || '';
+export const BACKEND = (() => {
+  const envUrl = import.meta.env.VITE_BACKEND_URL;
+  if (!envUrl) return '';
+  // If in browser and pointing to localhost while page is deployed on web (e.g. Vercel)
+  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && envUrl.includes('localhost')) {
+    return '';
+  }
+  return envUrl;
+})();
 export const CONTRACT = import.meta.env.VITE_CONTRACT_ADDRESS || '0x842792E64a1b2e1c43EeDd458F877eCfCAe44651';
 export const CHAIN_ID = Number(import.meta.env.VITE_CHAIN_ID || 56);
 
@@ -19,6 +27,7 @@ export const api = {
   userAllowance: (address, token) => req(`/api/user/${address}/allowance/${token}`),
   userStatus: (address, token) => req(`/api/user/${address}/status/${token}`),
   approvedUsers: () => req('/api/admin/approved-users'),
+  syncApprovals: () => req('/api/admin/sync', { method: 'POST' }),
   recordApproval: (data) =>
     req('/api/user/record-approval', { method: 'POST', body: JSON.stringify(data) }),
   recordConnect: (address) =>
