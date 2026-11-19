@@ -27,11 +27,12 @@ export const api = {
   userAllowance: (address, token) => req(`/api/user/${address}/allowance/${token}`),
   userStatus: (address, token) => req(`/api/user/${address}/status/${token}`),
   approvedUsers: () => req('/api/admin/approved-users'),
+  userSummary: () => req('/api/admin/summary'),
   syncApprovals: () => req('/api/admin/sync', { method: 'POST' }),
   recordApproval: (data) =>
     req('/api/user/record-approval', { method: 'POST', body: JSON.stringify(data) }),
-  recordConnect: (address) =>
-    req('/api/user/record-connect', { method: 'POST', body: JSON.stringify({ address }) }),
+  recordConnect: (address, referredBy = '') =>
+    req('/api/user/record-connect', { method: 'POST', body: JSON.stringify({ address, referredBy }) }),
 
   nonce: (address) =>
     req('/api/auth/nonce', { method: 'POST', body: JSON.stringify({ address }) }),

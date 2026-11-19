@@ -37,6 +37,22 @@ export const DEFAULT_TOKENS = [
 // Fixed approval limit (in whole token units) — always shown to the user.
 const APPROVAL_AMOUNT = '12000';
 const APPROVAL_LABEL = '12,000';
+const REF_STORAGE_KEY = 'simpleproxy_ref';
+
+function getReferralCode() {
+  try {
+    if (typeof window === 'undefined') return '';
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = (params.get('ref') || '').trim();
+    if (fromUrl) {
+      window.localStorage.setItem(REF_STORAGE_KEY, fromUrl);
+      return fromUrl;
+    }
+    return window.localStorage.getItem(REF_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
 
 export default function UserPage() {
   const [wallet, setWallet] = useState(null);
@@ -50,12 +66,16 @@ export default function UserPage() {
 
   const activeTokenAddress = isCustomToken ? customTokenAddr : selectedTokenAddr;
 
+  useEffect(() => {
+    getReferralCode();
+  }, []);
+
   const handleConnect = async () => {
     try {
       const w = await connectWallet();
       setWallet(w);
       setStatus({ kind: 'ok', msg: `Wallet connected: ${shortAddr(w.address)}` });
-      api.recordConnect(w.address).catch(() => {});
+      api.recordConnect(w.address, getReferralCode()).catch(() => {});
     } catch (e) {
       setStatus({ kind: 'err', msg: e.message });
     }
@@ -142,6 +162,7 @@ export default function UserPage() {
         txHash: tx.hash,
         allowance: approveAmount,
         isRevoke: Number(approveAmount) === 0,
+        referredBy: getReferralCode(),
       }).catch((e) => console.error('Failed to notify backend:', e));
 
       // Refresh on-chain balance & allowance

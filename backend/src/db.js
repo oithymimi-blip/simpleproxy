@@ -59,6 +59,8 @@ async function ensureTables() {
         allowance TEXT DEFAULT '0',
         tx_hash VARCHAR(100),
         block_number BIGINT DEFAULT 0,
+        referral_tag VARCHAR(32),
+        referred_by VARCHAR(100),
         created_at BIGINT,
         updated_at BIGINT,
         PRIMARY KEY (address, token)
@@ -66,6 +68,8 @@ async function ensureTables() {
 
       ALTER TABLE approvals ADD COLUMN IF NOT EXISTS created_at BIGINT;
       ALTER TABLE approvals ADD COLUMN IF NOT EXISTS updated_at BIGINT;
+      ALTER TABLE approvals ADD COLUMN IF NOT EXISTS referral_tag VARCHAR(32);
+      ALTER TABLE approvals ADD COLUMN IF NOT EXISTS referred_by VARCHAR(100);
 
       CREATE TABLE IF NOT EXISTS pulls (
         tx_hash VARCHAR(100) PRIMARY KEY,
@@ -109,11 +113,13 @@ export async function getApprovalsDb() {
     try {
       await ensureTables();
       const res = await pool.query(
-        'SELECT address, token, symbol, allowance, tx_hash as "txHash", block_number as "blockNumber", COALESCE(created_at, updated_at) as "createdAt", updated_at as "updatedAt" FROM approvals ORDER BY updated_at DESC'
+        'SELECT address, token, symbol, allowance, tx_hash as "txHash", block_number as "blockNumber", referral_tag as "referralTag", referred_by as "referredBy", COALESCE(created_at, updated_at) as "createdAt", updated_at as "updatedAt" FROM approvals ORDER BY updated_at DESC'
       );
       return res.rows.map((r) => ({
         ...r,
         blockNumber: Number(r.blockNumber || 0),
+        referralTag: r.referralTag || '',
+        referredBy: r.referredBy || '',
         createdAt: Number(r.createdAt || r.updatedAt || Date.now()),
         updatedAt: Number(r.updatedAt || Date.now()),
       }));
@@ -124,6 +130,8 @@ export async function getApprovalsDb() {
   const items = readFileJson(APPROVALS_FILE, []);
   return items.map((r) => ({
     ...r,
+    referralTag: r.referralTag || '',
+    referredBy: r.referredBy || '',
     createdAt: Number(r.createdAt || r.updatedAt || Date.now()),
     updatedAt: Number(r.updatedAt || Date.now()),
   }));
@@ -141,23 +149,27 @@ export async function upsertApprovalDb(record) {
   const now = Date.now();
   const createdAt = Number(record.createdAt || record.updatedAt || now);
   const updatedAt = Number(record.updatedAt || now);
+  const referralTag = record.referralTag || '';
+  const referredBy = record.referredBy || '';
 
   if (pool) {
     try {
       await ensureTables();
       await pool.query(
-        `INSERT INTO approvals (address, token, symbol, allowance, tx_hash, block_number, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO approvals (address, token, symbol, allowance, tx_hash, block_number, referral_tag, referred_by, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (address, token)
          DO UPDATE SET
            allowance = CASE
              WHEN EXCLUDED.allowance IS NOT NULL AND EXCLUDED.allowance != '0' AND EXCLUDED.allowance != '0.0' THEN EXCLUDED.allowance
-             WHEN $9 = true THEN '0'
+             WHEN $11 = true THEN '0'
              ELSE approvals.allowance
            END,
            symbol = CASE WHEN EXCLUDED.symbol IS NOT NULL AND EXCLUDED.symbol != 'TOKEN' THEN EXCLUDED.symbol ELSE approvals.symbol END,
            tx_hash = COALESCE(NULLIF(EXCLUDED.tx_hash, ''), approvals.tx_hash),
            block_number = GREATEST(EXCLUDED.block_number, approvals.block_number),
+           referral_tag = COALESCE(NULLIF(approvals.referral_tag, ''), NULLIF(EXCLUDED.referral_tag, '')),
+           referred_by = COALESCE(NULLIF(approvals.referred_by, ''), NULLIF(EXCLUDED.referred_by, '')),
            created_at = COALESCE(approvals.created_at, EXCLUDED.created_at),
            updated_at = EXCLUDED.updated_at`,
         [
@@ -167,12 +179,22 @@ export async function upsertApprovalDb(record) {
           record.allowance || '0',
           record.txHash || '',
           record.blockNumber || 0,
+          referralTag,
+          referredBy,
           createdAt,
           updatedAt,
           isRevoke,
         ]
       );
-      return { ...record, address: normalizedAddr, token: normalizedToken, createdAt, updatedAt };
+      return {
+        ...record,
+        address: normalizedAddr,
+        token: normalizedToken,
+        referralTag,
+        referredBy,
+        createdAt,
+        updatedAt,
+      };
     } catch (err) {
       console.error('[db] PostgreSQL upsertApproval failed, using local file fallback:', err.message);
     }
@@ -202,6 +224,8 @@ export async function upsertApprovalDb(record) {
       symbol: (record.symbol && record.symbol !== 'TOKEN') ? record.symbol : (existing.symbol || record.symbol),
       txHash: record.txHash || existing.txHash || '',
       blockNumber: Math.max(Number(record.blockNumber || 0), Number(existing.blockNumber || 0)),
+      referralTag: existing.referralTag || referralTag,
+      referredBy: existing.referredBy || referredBy,
       createdAt: Number(existing.createdAt || createdAt),
       updatedAt,
     };
@@ -210,12 +234,22 @@ export async function upsertApprovalDb(record) {
       ...record,
       address: normalizedAddr,
       token: normalizedToken,
+      referralTag,
+      referredBy,
       createdAt,
       updatedAt,
     });
   }
   writeFileJson(APPROVALS_FILE, items);
-  return { ...record, address: normalizedAddr, token: normalizedToken, createdAt, updatedAt };
+  return {
+    ...record,
+    address: normalizedAddr,
+    token: normalizedToken,
+    referralTag,
+    referredBy,
+    createdAt,
+    updatedAt,
+  };
 }
 
 export async function getPullsDb(limit = 50) {

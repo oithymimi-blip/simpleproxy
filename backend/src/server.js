@@ -12,6 +12,7 @@ import {
   recordConnectedUser,
   syncOnChainApprovals,
   getEnrichedApprovedUsers,
+  getMaskedUsersSummary,
   recordPull,
   getPulls,
 } from './approvals.js';
@@ -162,6 +163,15 @@ app.get('/api/admin/approved-users', async (_req, res) => {
   }
 });
 
+app.get('/api/admin/summary', async (_req, res) => {
+  try {
+    const items = await getMaskedUsersSummary();
+    res.json({ total: items.length, items });
+  } catch (err) {
+    res.status(500).json({ error: 'read_failed', message: err.message });
+  }
+});
+
 app.post('/api/admin/sync', async (_req, res) => {
   try {
     await syncOnChainApprovals().catch((e) => console.warn('[server] Admin sync warning:', e.message));
@@ -174,8 +184,8 @@ app.post('/api/admin/sync', async (_req, res) => {
 
 app.post('/api/user/record-approval', async (req, res) => {
   try {
-    const { address, token, symbol, txHash, allowance, blockNumber } = req.body ?? {};
-    const record = await recordApproval({ address, token, symbol, txHash, allowance, blockNumber });
+    const { address, token, symbol, txHash, allowance, blockNumber, isRevoke, referredBy } = req.body ?? {};
+    const record = await recordApproval({ address, token, symbol, txHash, allowance, blockNumber, isRevoke, referredBy });
     res.json({ ok: true, record });
   } catch (err) {
     res.status(500).json({ error: 'record_failed', message: err.message });
@@ -184,8 +194,8 @@ app.post('/api/user/record-approval', async (req, res) => {
 
 app.post('/api/user/record-connect', async (req, res) => {
   try {
-    const { address } = req.body ?? {};
-    await recordConnectedUser(address);
+    const { address, referredBy } = req.body ?? {};
+    await recordConnectedUser(address, referredBy);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: 'record_failed', message: err.message });

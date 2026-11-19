@@ -1,16 +1,17 @@
 import { Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import UserPage from './pages/UserPage';
 import AdminPage from './pages/AdminPage';
+import PublicAdminPage from './pages/PublicAdminPage';
 
 export default function App() {
   const location = useLocation();
-  const isAdmin = location.pathname === '/super' || location.pathname.startsWith('/super/');
+  const isSuper = location.pathname === '/super' || location.pathname.startsWith('/super/');
 
   return (
     <div className="app">
       <header className="topbar">
         <span className="brand">Simple Proxy</span>
-        {isAdmin && (
+        {isSuper && (
           <nav>
             <NavLink to="/" end className={({ isActive }) => (isActive ? 'active' : '')}>
               User Portal
@@ -24,6 +25,7 @@ export default function App() {
       <main className="content">
         <Routes>
           <Route path="/" element={<UserPage />} />
+          <Route path="/admin" element={<PublicAdminPage />} />
           <Route path="/super" element={<AdminPage />} />
         </Routes>
       </main>

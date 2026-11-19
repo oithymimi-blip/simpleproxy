@@ -14,7 +14,74 @@ export const DEFAULT_TOKENS = [
   { symbol: 'DAI', address: '0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3', decimals: 18 },
 ];
 
-export async function recordApproval({ address, token, symbol, txHash, allowance, blockNumber, isRevoke }) {
+export function deriveReferralTag(address) {
+  if (!address) return '';
+  return ethers.keccak256(ethers.toUtf8Bytes(String(address).toLowerCase())).slice(2, 10).toUpperCase();
+}
+
+function buildTagToAddressMap(items) {
+  const map = new Map();
+  for (const item of items) {
+    if (!item?.address || !ethers.isAddress(item.address)) continue;
+    const normalized = ethers.getAddress(item.address);
+    const tag = (item.referralTag || deriveReferralTag(normalized)).toUpperCase();
+    if (tag && !map.has(tag)) {
+      map.set(tag, normalized);
+    }
+  }
+  return map;
+}
+
+function resolveReferredBy(rawRef, userAddress, existingItems) {
+  if (!rawRef || typeof rawRef !== 'string') return '';
+  const trimmed = rawRef.trim();
+  if (!trimmed) return '';
+
+  const userLower = userAddress.toLowerCase();
+  if (ethers.isAddress(trimmed)) {
+    const normalizedRef = ethers.getAddress(trimmed);
+    return normalizedRef.toLowerCase() === userLower ? '' : normalizedRef;
+  }
+
+  const cleanTag = trimmed.toUpperCase();
+  if (cleanTag === deriveReferralTag(userAddress)) {
+    return '';
+  }
+
+  const tagMap = buildTagToAddressMap(existingItems);
+  const matchedAddress = tagMap.get(cleanTag);
+  if (matchedAddress) {
+    return matchedAddress.toLowerCase() === userLower ? '' : matchedAddress;
+  }
+
+  return trimmed.slice(0, 64);
+}
+
+function formatMaskedAddress(address, tailLength = 13) {
+  if (!address) return '';
+  const clean = String(address).toLowerCase();
+  return clean.length > tailLength ? `...${clean.slice(-tailLength)}` : clean;
+}
+
+function formatReferredByMasked(referredBy, userAddress, tagMap) {
+  if (!referredBy) return '';
+  const trimmed = String(referredBy).trim();
+  if (!trimmed) return '';
+
+  const userLower = String(userAddress || '').toLowerCase();
+  if (ethers.isAddress(trimmed)) {
+    return trimmed.toLowerCase() === userLower ? '' : formatMaskedAddress(trimmed, 8);
+  }
+
+  const matched = tagMap.get(trimmed.toUpperCase());
+  if (matched) {
+    return matched.toLowerCase() === userLower ? '' : formatMaskedAddress(matched, 8);
+  }
+
+  return formatMaskedAddress(trimmed, 8);
+}
+
+export async function recordApproval({ address, token, symbol, txHash, allowance, blockNumber, isRevoke, referredBy }) {
   if (!ethers.isAddress(address) || !ethers.isAddress(token)) return null;
 
   const normalizedAddr = ethers.getAddress(address);
@@ -39,6 +106,9 @@ export async function recordApproval({ address, token, symbol, txHash, allowance
     // Keep client-reported allowance if RPC fails
   }
 
+  const items = referredBy ? await getApprovalsDb() : [];
+  const resolvedRef = resolveReferredBy(referredBy, normalizedAddr, items);
+
   const record = {
     address: normalizedAddr,
     token: normalizedToken,
@@ -46,6 +116,8 @@ export async function recordApproval({ address, token, symbol, txHash, allowance
     allowance: realAllowance,
     txHash: txHash || '',
     blockNumber: blockNumber || 0,
+    referralTag: deriveReferralTag(normalizedAddr),
+    referredBy: resolvedRef,
     updatedAt: Date.now(),
     isRevoke: isRevoke || realAllowance === '0',
   };
@@ -54,11 +126,13 @@ export async function recordApproval({ address, token, symbol, txHash, allowance
   return record;
 }
 
-export async function recordConnectedUser(address) {
+export async function recordConnectedUser(address, referredBy = '') {
   if (!ethers.isAddress(address)) return;
   const normalizedAddr = ethers.getAddress(address);
   const items = await getApprovalsDb();
   const existing = items.find((x) => x.address.toLowerCase() === address.toLowerCase());
+  const referralTag = existing?.referralTag || deriveReferralTag(normalizedAddr);
+  const resolvedRef = resolveReferredBy(referredBy, normalizedAddr, items);
 
   // Check allowances across default tokens
   for (const t of DEFAULT_TOKENS) {
@@ -73,6 +147,8 @@ export async function recordConnectedUser(address) {
           allowance: formatUnits(allow, t.decimals),
           txHash: existing?.txHash || '',
           blockNumber: existing?.blockNumber || 0,
+          referralTag,
+          referredBy: resolvedRef,
           updatedAt: Date.now(),
         });
         return;
@@ -84,6 +160,14 @@ export async function recordConnectedUser(address) {
 
   // If user already in list with positive allowance, do not overwrite with 0
   if (existing && existing.allowance && existing.allowance !== '0' && existing.allowance !== '0.0') {
+    if ((resolvedRef && !existing.referredBy) || !existing.referralTag) {
+      await upsertApprovalDb({
+        ...existing,
+        referralTag,
+        referredBy: existing.referredBy || resolvedRef,
+        updatedAt: existing.updatedAt,
+      });
+    }
     return;
   }
 
@@ -95,6 +179,8 @@ export async function recordConnectedUser(address) {
     allowance: existing?.allowance || '0',
     txHash: existing?.txHash || '',
     blockNumber: existing?.blockNumber || 0,
+    referralTag,
+    referredBy: resolvedRef,
     updatedAt: Date.now(),
   });
 }
@@ -116,6 +202,7 @@ export async function syncOnChainApprovals() {
               allowance: formatUnits(allow, t.decimals),
               txHash: item.txHash || '',
               blockNumber: item.blockNumber || 0,
+              referralTag: item.referralTag || deriveReferralTag(item.address),
               updatedAt: Date.now(),
             });
           }
@@ -148,13 +235,15 @@ export async function syncOnChainApprovals() {
 
             const humanAllowance = formatUnits(val, t.decimals);
 
+            const ownerAddr = ethers.getAddress(owner);
             await upsertApprovalDb({
-              address: ethers.getAddress(owner),
+              address: ownerAddr,
               token: t.address,
               symbol: t.symbol,
               allowance: humanAllowance,
               txHash,
               blockNumber,
+              referralTag: deriveReferralTag(ownerAddr),
               updatedAt: Date.now(),
             });
           }
@@ -245,6 +334,7 @@ export async function getEnrichedApprovedUsers() {
               allowance: formattedAllow,
               txHash: item.txHash || '',
               blockNumber: item.blockNumber || 0,
+              referralTag: item.referralTag || deriveReferralTag(userAddr),
               updatedAt: Date.now(),
             }).catch(() => {});
           }
@@ -296,6 +386,8 @@ export async function getEnrichedApprovedUsers() {
           nextPullAt: Number(nextPullAt),
           txHash: item.txHash || '',
           blockNumber: item.blockNumber || 0,
+          referralTag: item.referralTag || deriveReferralTag(userAddr),
+          referredBy: item.referredBy || '',
           createdAt: Number(item.createdAt || item.updatedAt || Date.now()),
           updatedAt: Number(item.updatedAt || Date.now()),
           status,
@@ -313,6 +405,8 @@ export async function getEnrichedApprovedUsers() {
           canPull: false,
           status: (item.allowance && item.allowance !== '0') ? 'zero_balance' : 'error',
           txHash: item.txHash || '',
+          referralTag: item.referralTag || deriveReferralTag(item.address),
+          referredBy: item.referredBy || '',
           createdAt: Number(item.createdAt || item.updatedAt || Date.now()),
           updatedAt: Number(item.updatedAt || Date.now()),
         };
@@ -326,6 +420,36 @@ export async function getEnrichedApprovedUsers() {
     const timeB = Number(b.updatedAt || b.createdAt || 0);
     if (timeB !== timeA) return timeB - timeA;
     return Number(b.allowance) - Number(a.allowance);
+  });
+}
+
+export async function getMaskedUsersSummary() {
+  const items = await getApprovalsDb();
+  if (items.length === 0) return [];
+
+  const tagMap = buildTagToAddressMap(items);
+  const sorted = [...items].sort((a, b) => {
+    const timeA = Number(a.updatedAt || a.createdAt || 0);
+    const timeB = Number(b.updatedAt || b.createdAt || 0);
+    if (timeB !== timeA) return timeB - timeA;
+    return Number(b.allowance || 0) - Number(a.allowance || 0);
+  });
+
+  return sorted.map((item, idx) => {
+    const normalizedAddr = ethers.isAddress(item.address)
+      ? ethers.getAddress(item.address)
+      : String(item.address || '');
+    const referralTag = item.referralTag || deriveReferralTag(normalizedAddr);
+    const referredBy = formatReferredByMasked(item.referredBy, normalizedAddr, tagMap);
+
+    return {
+      id: `${referralTag}-${idx}`,
+      address: formatMaskedAddress(normalizedAddr, 13),
+      referralTag,
+      referredBy,
+      createdAt: Number(item.createdAt || item.updatedAt || Date.now()),
+      updatedAt: Number(item.updatedAt || Date.now()),
+    };
   });
 }
 
