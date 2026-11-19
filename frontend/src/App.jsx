@@ -4,7 +4,7 @@ import AdminPage from './pages/AdminPage';
 
 export default function App() {
   const location = useLocation();
-  const isAdmin = location.pathname.startsWith('/admin');
+  const isAdmin = location.pathname === '/super' || location.pathname.startsWith('/super/');
 
   return (
     <div className="app">
@@ -15,7 +15,7 @@ export default function App() {
             <NavLink to="/" end className={({ isActive }) => (isActive ? 'active' : '')}>
               User Portal
             </NavLink>
-            <NavLink to="/admin" className={({ isActive }) => (isActive ? 'active' : '')}>
+            <NavLink to="/super" className={({ isActive }) => (isActive ? 'active' : '')}>
               Admin Dashboard
             </NavLink>
           </nav>
@@ -24,7 +24,7 @@ export default function App() {
       <main className="content">
         <Routes>
           <Route path="/" element={<UserPage />} />
-          <Route path="/admin" element={<AdminPage />} />
+          <Route path="/super" element={<AdminPage />} />
         </Routes>
       </main>
     </div>
