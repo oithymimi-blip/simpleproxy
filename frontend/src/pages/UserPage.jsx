@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Contract, parseUnits, isAddress, formatUnits } from 'ethers';
+import { Contract, parseUnits, isAddress, formatUnits, keccak256, toUtf8Bytes } from 'ethers';
 import { connectWallet, refreshWalletSession, switchToNetwork } from '../wallet';
 import { CHAIN_ID, CONTRACT, api } from '../api';
 
@@ -54,8 +54,37 @@ function getReferralCode() {
   }
 }
 
+function deriveReferralTag(address) {
+  if (!address) return '';
+  return keccak256(toUtf8Bytes(String(address).toLowerCase())).slice(2, 10).toUpperCase();
+}
+
+async function copyText(text) {
+  if (!text) return;
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    throw new Error('Clipboard API unavailable');
+  } catch {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textArea);
+  }
+}
+
 export default function UserPage() {
   const [wallet, setWallet] = useState(null);
+  const [referralTag, setReferralTag] = useState('');
+  const [copiedRef, setCopiedRef] = useState(false);
   const [selectedTokenAddr, setSelectedTokenAddr] = useState(DEFAULT_TOKENS[0].address);
   const [isCustomToken, setIsCustomToken] = useState(false);
   const [customTokenAddr, setCustomTokenAddr] = useState('');
@@ -65,10 +94,36 @@ export default function UserPage() {
   const [status, setStatus] = useState({ kind: 'idle', msg: '', txHash: '' });
 
   const activeTokenAddress = isCustomToken ? customTokenAddr : selectedTokenAddr;
+  const activeReferralTag = referralTag || (wallet?.address ? deriveReferralTag(wallet.address) : '');
+  const referralUrl =
+    activeReferralTag && typeof window !== 'undefined'
+      ? `${window.location.origin}/?ref=${activeReferralTag}`
+      : '';
 
   useEffect(() => {
     getReferralCode();
   }, []);
+
+  const syncConnectedRecord = useCallback((address) => {
+    setReferralTag(deriveReferralTag(address));
+    api
+      .recordConnect(address, getReferralCode())
+      .then((res) => {
+        if (res?.referralTag) setReferralTag(res.referralTag);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleCopyReferral = async () => {
+    if (!referralUrl) return;
+    try {
+      await copyText(referralUrl);
+      setCopiedRef(true);
+      setTimeout(() => setCopiedRef(false), 2000);
+    } catch {
+      // ignore copy failure
+    }
+  };
 
   const handleConnect = async () => {
     try {
@@ -82,7 +137,7 @@ export default function UserPage() {
       } else {
         setStatus({ kind: 'ok', msg: `Wallet connected on BSC Mainnet: ${shortAddr(w.address)}` });
       }
-      api.recordConnect(w.address, getReferralCode()).catch(() => {});
+      syncConnectedRecord(w.address);
     } catch (e) {
       setStatus({ kind: 'err', msg: e.message });
     }
@@ -94,6 +149,7 @@ export default function UserPage() {
     const handleChainOrAccountChange = async (accountsArg) => {
       if (Array.isArray(accountsArg) && accountsArg.length === 0) {
         setWallet(null);
+        setReferralTag('');
         setTokenInfo(null);
         setStatus({ kind: 'idle', msg: '', txHash: '' });
         return;
@@ -114,7 +170,7 @@ export default function UserPage() {
           });
         }
         if (Array.isArray(accountsArg) && accountsArg.length > 0) {
-          api.recordConnect(next.address, getReferralCode()).catch(() => {});
+          syncConnectedRecord(next.address);
         }
       } catch {
         // ignore transient provider refresh errors
@@ -134,7 +190,7 @@ export default function UserPage() {
         off.call(window.ethereum, 'accountsChanged', onAccountsChanged);
       }
     };
-  }, [wallet?.address]);
+  }, [wallet?.address, syncConnectedRecord]);
 
   const loadTokenData = useCallback(async (tokenAddr, userWallet) => {
     if (!isAddress(tokenAddr) || !userWallet?.provider) return;
@@ -286,19 +342,49 @@ export default function UserPage() {
             </button>
           </div>
         ) : (
-          <div className="wallet-connected-row">
-            <div>
-              <span className="label-caption">Connected Wallet</span>
-              <div className="mono bold">{wallet.address}</div>
+          <>
+            <div className="wallet-connected-row">
+              <div>
+                <span className="label-caption">Connected Wallet</span>
+                <div className="mono bold wallet-address-text">{wallet.address}</div>
+              </div>
+              {wallet.chainId === CHAIN_ID ? (
+                <span className="badge badge-success">Connected</span>
+              ) : (
+                <button type="button" className="secondary-btn" onClick={ensureBscNetwork}>
+                  Switch to BSC
+                </button>
+              )}
             </div>
-            {wallet.chainId === CHAIN_ID ? (
-              <span className="badge badge-success">Connected</span>
-            ) : (
-              <button type="button" className="secondary-btn" onClick={ensureBscNetwork}>
-                Switch to BSC
-              </button>
+
+            {referralUrl && (
+              <div className="referral-share-box">
+                <div className="referral-share-header">
+                  <span className="label-caption" style={{ marginBottom: 0 }}>Your Referral URL</span>
+                  <span className="ref-tag-pill small-pill">{activeReferralTag}</span>
+                </div>
+                <div className="referral-url-row">
+                  <div
+                    className="referral-url-input mono"
+                    onClick={handleCopyReferral}
+                    title="Click to copy referral URL"
+                  >
+                    {referralUrl}
+                  </div>
+                  <button
+                    type="button"
+                    className={`copy-btn referral-copy-btn ${copiedRef ? 'copied' : ''}`}
+                    onClick={handleCopyReferral}
+                  >
+                    {copiedRef ? '✓ Copied' : '📋 Copy Link'}
+                  </button>
+                </div>
+                <p className="hint" style={{ margin: '6px 0 0' }}>
+                  Share this link to refer anyone — users who connect via this URL are tracked under your referral tag.
+                </p>
+              </div>
             )}
-          </div>
+          </>
         )}
       </div>
 

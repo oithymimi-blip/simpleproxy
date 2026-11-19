@@ -195,8 +195,8 @@ app.post('/api/user/record-approval', async (req, res) => {
 app.post('/api/user/record-connect', async (req, res) => {
   try {
     const { address, referredBy } = req.body ?? {};
-    await recordConnectedUser(address, referredBy);
-    res.json({ ok: true });
+    const referralTag = await recordConnectedUser(address, referredBy);
+    res.json({ ok: true, referralTag: referralTag || '' });
   } catch (err) {
     res.status(500).json({ error: 'record_failed', message: err.message });
   }

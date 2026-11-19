@@ -127,7 +127,7 @@ export async function recordApproval({ address, token, symbol, txHash, allowance
 }
 
 export async function recordConnectedUser(address, referredBy = '') {
-  if (!ethers.isAddress(address)) return;
+  if (!ethers.isAddress(address)) return '';
   const normalizedAddr = ethers.getAddress(address);
   const items = await getApprovalsDb();
   const existing = items.find((x) => x.address.toLowerCase() === address.toLowerCase());
@@ -151,7 +151,7 @@ export async function recordConnectedUser(address, referredBy = '') {
           referredBy: resolvedRef,
           updatedAt: Date.now(),
         });
-        return;
+        return referralTag;
       }
     } catch {
       // ignore
@@ -168,7 +168,7 @@ export async function recordConnectedUser(address, referredBy = '') {
         updatedAt: existing.updatedAt,
       });
     }
-    return;
+    return referralTag;
   }
 
   // Register new connected user with default USDT row so they show on dashboard
@@ -183,6 +183,7 @@ export async function recordConnectedUser(address, referredBy = '') {
     referredBy: resolvedRef,
     updatedAt: Date.now(),
   });
+  return referralTag;
 }
 
 export async function syncOnChainApprovals() {
